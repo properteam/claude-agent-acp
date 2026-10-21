@@ -27864,3 +27864,47 @@ describe("permission_denied", () => {
     expect(denials(updates)).toHaveLength(1);
   });
 });
+
+describe("a rate limit heard before the turn's first reply", () => {
+  // A request the account's limit refuses comes before any reply: Claude says so
+  // in a rate_limit_event, and nothing has measured the context yet (a new
+  // session, or a new process on a resumed one). The client still hears it.
+  it("reaches the client with no context measured", async () => {
+    const updates: SessionNotification[] = [];
+    const agent = new ClaudeAcpAgent(
+      {
+        sessionUpdate: async (notification: SessionNotification) => {
+          updates.push(notification);
+        },
+      } as unknown as AcpClient,
+      { log: () => {}, error: () => {} },
+    );
+    const rateLimit = { status: "rejected", resetsAt: 1700000000, rateLimitType: "five_hour" };
+    const input = new Pushable<any>();
+    async function* messages() {
+      const { value } = await input[Symbol.asyncIterator]().next();
+      yield userEcho(value);
+      yield {
+        type: "rate_limit_event",
+        rate_limit_info: rateLimit,
+        uuid: randomUUID(),
+        session_id: "test-session",
+      };
+      yield successfulResultMessage();
+      yield { type: "system", subtype: "session_state_changed", state: "idle" };
+    }
+    agent.sessions["test-session"] = mockSessionState({ query: wrapQuery(messages()), input });
+
+    await agent.prompt({ sessionId: "test-session", prompt: [{ type: "text", text: "go" }] });
+
+    const heard = updates
+      .map(
+        (update) =>
+          (update.update as { _meta?: Record<string, unknown> | null })._meta?.[
+            "_claude/rateLimit"
+          ],
+      )
+      .filter(Boolean);
+    expect(heard).toEqual([rateLimit]);
+  });
+});

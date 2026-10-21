@@ -8175,6 +8175,11 @@ export class ClaudeAcpAgent {
             break;
           }
           case "rate_limit_event": {
+            // The account's limits as Claude heard them. With the context measured
+            // this turn they ride its usage_update; before the turn's first reply
+            // (a request the limit refused, a new process on a resumed session)
+            // nothing is measured, so they go alone rather than not at all.
+            const rateLimit = { "_claude/rateLimit": message.rate_limit_info };
             if (lastAssistantTotalUsage !== null) {
               await sendUpdate({
                 sessionId: params.sessionId,
@@ -8182,8 +8187,13 @@ export class ClaudeAcpAgent {
                   sessionUpdate: "usage_update",
                   used: lastAssistantTotalUsage,
                   size: session.contextWindowSize,
-                  _meta: { "_claude/rateLimit": message.rate_limit_info },
+                  _meta: rateLimit,
                 }),
+              });
+            } else {
+              await sendUpdate({
+                sessionId: params.sessionId,
+                update: { sessionUpdate: "session_info_update", _meta: rateLimit },
               });
             }
             break;
